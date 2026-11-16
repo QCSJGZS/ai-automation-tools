@@ -1,0 +1,15 @@
+{
+  "name": "ai-automation-tools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI 自动化工具集：脚本、工作流与 Agent 能力",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test",
+    "dxf": "node scripts/dxf_profile.mjs"
+  },
+  "license": "MIT"
+}
