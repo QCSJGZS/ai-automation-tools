@@ -12,7 +12,9 @@ AI 自动化工具集：把重复劳动固化成可复用的脚本、工作流�
 
 ```
 .
-├── scripts/      # 命令行脚本与自动化小工具
+├── scripts/      # 命令行工具（Python / Node 入口）
+├── lib/          # 可复用库（零依赖，浏览器与 Node 通用）
+├── tests/        # 回归测试（node --test）
 ├── workflows/    # 可编排的自动化流程
 ├── agents/       # Agent 提示词、技能与配置
 └── docs/         # 使用说明与踩坑记录
@@ -24,7 +26,9 @@ AI 自动化工具集：把重复劳动固化成可复用的脚本、工作流�
 
 | 工具 | 作用 | 说明 |
 | --- | --- | --- |
-| `scripts/dxf_stats.py` | DXF 批量体检：图元数、类型、图层、外包尺寸、单位 | 零依赖，[文档](docs/dxf-stats.md) |
+| `scripts/dxf_stats.py` | DXF 批量体检：图元数、类型、图层、外包尺寸、单位 | Python 3.8+，[文档](docs/dxf-stats.md) |
+| `scripts/dxf_profile.mjs` | DXF 截面识别：图框剔除、视图选择、外轮廓 + 内孔 | Node 18+，[文档](docs/dxf-recognize.md) |
+| `lib/dxf/` | 截面识别链路（解析 / 几何 / 归类三段） | [说明](lib/dxf/README.md) |
 
 ## 快速开始
 
@@ -32,8 +36,15 @@ AI 自动化工具集：把重复劳动固化成可复用的脚本、工作流�
 git clone https://github.com/QCSJGZS/ai-automation-tools.git
 cd ai-automation-tools
 
-# 对一批 DXF 做体检
+# 体检一批 DXF
 python scripts/dxf_stats.py D:\图纸 --recursive
+
+# 识别单张图的截面
+node scripts/dxf_profile.mjs D:\图纸\-6.1.dxf
+node scripts/dxf_profile.mjs D:\图纸\-6.1.dxf --json --svg out/preview.svg
+
+# 跑测试
+npm test
 ```
 
 ## 使用约定
@@ -41,7 +52,7 @@ python scripts/dxf_stats.py D:\图纸 --recursive
 1. 优先使用跨平台脚本（Python / Node.js），零第三方依赖优先。
 2. 敏感信息通过环境变量传入，不写入仓库。
 3. 破坏性操作必须先确认目标路径，不改动输入文件。
-4. 新增工具同时补：目录 README 的一行说明 + `docs/` 里的用法与限制。
+4. 新增工具同时补：目录 README 的一行说明 + `docs/` 里的用法与限制 + 至少一个回归测试。
 
 ## 贡献
 
