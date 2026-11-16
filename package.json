@@ -9,7 +9,8 @@
   },
   "scripts": {
     "test": "node --test",
-    "dxf": "node scripts/dxf_profile.mjs"
+    "dxf": "node scripts/dxf_profile.mjs",
+    "dxf:batch": "node scripts/dxf_batch.mjs"
   },
   "license": "MIT"
 }
