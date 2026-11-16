@@ -6,6 +6,7 @@
 | --- | --- | --- |
 | [`dxf_stats.py`](dxf_stats.py) | DXF 批量体检：图元数、类型分布、图层、外包尺寸、图纸单位 | Python 3.8+ 标准库 |
 | [`dxf_profile.mjs`](dxf_profile.mjs) | DXF 截面识别：剔除图框、选主视图、输出外轮廓与内孔 | Node 18+，依赖 `lib/dxf/` |
+| [`dxf_batch.mjs`](dxf_batch.mjs) | 批量识别目录下全部 DXF，产出 CSV 报告 | Node 18+，依赖 `lib/dxf/` |
 
 ## 约定
 
@@ -31,3 +32,13 @@ node scripts/dxf_profile.mjs D:\图纸\-6.1.dxf --svg out/preview.svg
 ```
 
 详见 [docs/dxf-stats.md](../docs/dxf-stats.md)、[docs/dxf-recognize.md](../docs/dxf-recognize.md)。
+
+## dxf_batch.mjs
+
+```bash
+node scripts/dxf_batch.mjs D:\图纸                      # 默认写 out/dxf-report.csv
+node scripts/dxf_batch.mjs D:\图纸 --csv out\11-16.csv
+node scripts/dxf_batch.mjs D:\图纸 --flat --limit 20 --json
+```
+
+有报错或无成功项时退出码为 1，可直接接批处理判断。详见 [docs/dxf-batch.md](../docs/dxf-batch.md)。
