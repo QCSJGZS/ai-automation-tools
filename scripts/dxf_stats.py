@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """dxf_stats.py —— DXF 图纸批量体检（零依赖，纯标准库）。
 
 用途：一次扫描一批 DXF，快速看清每张图的图元规模、类型分布、图层、
