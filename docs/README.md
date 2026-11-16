@@ -5,6 +5,7 @@
 | 文档 | 内容 |
 | --- | --- |
 | [dxf-stats.md](dxf-stats.md) | DXF 批量体检脚本：用法、输出字段、已知限制 |
+| [dxf-recognize.md](dxf-recognize.md) | DXF 截面识别链路：两段式结构、判定顺序、验收基线、限制 |
 
 ## 写文档的原则
 
