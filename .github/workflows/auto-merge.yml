@@ -1,0 +1,206 @@
+# 自动合并：只处理「已通过代码审查 + CI 检查全绿」的 PR，合并后回评通知作者。
+# 仓库：QCSJGZS/ai-automation-tools
+name: Auto Merge
+
+# ── 设计要点 ───────────────────────────────────────────────────────────────
+# 1. 事件触发（PR 创建/更新/审查）+ 每 10 分钟兜底扫查：审查先过、CI 后绿的场景靠定时补。
+# 2. 不订阅 check_suite，避免「本工作流产生 check run → 再次触发自己」的死循环。
+# 3. 评估时剔除本工作流自己的 check run（名字以 auto-merge 开头），否则自身 in_progress 会把自己卡死。
+# 4. 不依赖分支保护：条件全部在本工作流内判定；如需 GitHub 原生 merge queue，再另外开保护。
+# 5. 判定数据异常时一律 fail-closed（不合并），绝不在读不到数据的情况下动手。
+# ──────────────────────────────────────────────────────────────────────────
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
+  pull_request_review:
+    types: [submitted, dismissed]
+  workflow_dispatch:
+  schedule:
+    - cron: "*/10 * * * *"
+
+permissions:
+  contents: write # 合并 + 删除 head 分支
+  pull-requests: write # 合并 + 回评
+
+concurrency:
+  group: auto-merge-${{ github.event.pull_request.number || 'sweep' }}
+  cancel-in-progress: false
+
+env:
+  REQUIRED_APPROVALS: "1" # 需要的通过人数（不含作者本人）
+  REQUIRE_CHECKS: "true" # true = 必须存在 CI 检查且全部通过
+  MERGE_METHOD: "squash" # squash | merge | rebase
+  DELETE_BRANCH: "true" # 合并后删除 head 分支
+  BLOCK_LABELS: "do-not-merge,wip,no-automerge" # 命中任一标签则不合并
+  SELF_CHECK_PREFIX: "auto-merge" # 剔除自身检查用的名字前缀
+
+jobs:
+  auto-merge:
+    name: auto-merge
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 判定并合并
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          EVENT_PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -uo pipefail
+
+          MERGE_FLAG="--squash"
+          case "$MERGE_METHOD" in
+            merge)  MERGE_FLAG="--merge" ;;
+            rebase) MERGE_FLAG="--rebase" ;;
+            *)      MERGE_FLAG="--squash" ;;
+          esac
+          DEL_FLAG=""
+          [ "$DELETE_BRANCH" = "true" ] && DEL_FLAG="--delete-branch"
+
+          is_int() { case "${1:-}" in '' | *[!0-9]*) return 1 ;; *) return 0 ;; esac; }
+
+          PRS="${EVENT_PR:-}"
+          if [ -z "$PRS" ]; then
+            echo "::notice::未指定 PR，扫查全部 open PR"
+            PRS=$(gh pr list --repo "$REPO" --state open --limit 100 --json number --jq '.[].number' | tr -d '\r' | tr '\n' ' ')
+          fi
+
+          if [ -z "${PRS// /}" ]; then
+            echo "::notice::当前没有 open 的 PR，无需处理"
+            exit 0
+          fi
+
+          MERGED=0
+          SKIPPED=0
+
+          for PR in $PRS; do
+            echo "════════ PR #$PR ════════"
+
+            if ! INFO=$(gh pr view "$PR" --repo "$REPO" \
+                 --json isDraft,isCrossRepository,mergeable,headRefOid,headRefName,labels,author,title 2>/dev/null); then
+              echo "::warning::PR #$PR 读取失败，跳过"
+              continue
+            fi
+            jqv() { printf '%s' "$INFO" | jq -r "$1" 2>/dev/null | tr -d '\r'; }
+
+            SHA=$(jqv '.headRefOid')
+            BRANCH=$(jqv '.headRefName')
+            AUTHOR=$(jqv '.author.login')
+            TITLE=$(jqv '.title')
+            MERGEABLE=$(jqv '.mergeable')
+            IS_DRAFT=$(jqv '.isDraft')
+            IS_FORK=$(jqv '.isCrossRepository')
+            LABELS=$(jqv '[.labels[].name | ascii_downcase] | join(",")')
+
+            # ── 审查状态：同一人取最后一次有效表态，作者本人不算 ──
+            REVIEWS=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" 2>/dev/null || echo "[]")
+            mapfile -t R < <(printf '%s' "$REVIEWS" | jq -s -r '
+              (add // [])
+              | map(select(.user.login != $author
+                           and (.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")))
+              | group_by(.user.login)
+              | map(sort_by(.submitted_at) | last)
+              | ([.[] | select(.state == "APPROVED")] | length),
+                ([.[] | select(.state == "CHANGES_REQUESTED")] | length),
+                ([.[] | select(.state == "APPROVED") | .user.login] | join(", "))
+            ' --arg author "$AUTHOR" 2>/dev/null | tr -d '\r')
+            APPROVED="${R[0]:-0}"
+            CHANGES_REQ="${R[1]:-0}"
+            APPROVERS="${R[2]:-无}"
+
+            # ── CI 检查：取 head sha 的最新检查，剔除本工作流自身的 check run ──
+            mapfile -t C < <(gh api --paginate \
+              "repos/$REPO/commits/$SHA/check-runs?filter=latest&per_page=100" 2>/dev/null \
+              | jq -s -r '
+                (add // []) as $all
+                | ($all | map(select((.name | startswith($p)) | not))) as $c
+                | ($c | map(select(.status != "completed"))) as $pending
+                | ($c | map(select(.status == "completed"
+                                   and .conclusion != "success"
+                                   and .conclusion != "skipped"
+                                   and .conclusion != "neutral"))) as $bad
+                | ($c | length),
+                  ($pending | length),
+                  ($bad | length),
+                  ($bad | map(.name) | join(", "))
+              ' --arg p "$SELF_CHECK_PREFIX" 2>/dev/null | tr -d '\r')
+            CHECK_TOTAL="${C[0]:-0}"
+            CHECK_PENDING="${C[1]:-0}"
+            CHECK_BAD="${C[2]:-0}"
+            CHECK_BAD_NAMES="${C[3]:-}"
+
+            echo "审查通过 $APPROVED/$REQUIRED_APPROVALS（$APPROVERS）；变更请求 $CHANGES_REQ；检查 $CHECK_TOTAL 项（待完成 $CHECK_PENDING，失败 $CHECK_BAD）"
+
+            # ── 逐项判定（默认不放行；任何异常都落到 REASON）──
+            REASON=""
+
+            for V in "$APPROVED" "$CHANGES_REQ" "$CHECK_TOTAL" "$CHECK_PENDING" "$CHECK_BAD" "$REQUIRED_APPROVALS"; do
+              if ! is_int "$V"; then
+                REASON="$REASON；判定数据异常（非数字：$V），已按不合并处理"
+              fi
+            done
+
+            if [ "$IS_DRAFT" = "true" ]; then REASON="$REASON；草稿 PR"; fi
+            if [ "$IS_FORK" = "true" ]; then REASON="$REASON；来自 fork（GITHUB_TOKEN 只读）"; fi
+            if [ "$MERGEABLE" != "MERGEABLE" ]; then REASON="$REASON；合并状态 ${MERGEABLE:-空}（冲突或待计算）"; fi
+
+            IFS=',' read -ra BL <<< "$BLOCK_LABELS"
+            for L in "${BL[@]}"; do
+              L=$(printf '%s' "$L" | xargs)
+              if [ -n "$L" ]; then
+                case ",$LABELS," in
+                  *",$L,"*) REASON="$REASON；命中阻塞标签 $L" ;;
+                esac
+              fi
+            done
+
+            if is_int "$APPROVED" && is_int "$REQUIRED_APPROVALS" && [ "$APPROVED" -lt "$REQUIRED_APPROVALS" ]; then
+              REASON="$REASON；审查未达 $APPROVED/$REQUIRED_APPROVALS"
+            fi
+            if is_int "$CHANGES_REQ" && [ "$CHANGES_REQ" -gt 0 ]; then
+              REASON="$REASON；有 $CHANGES_REQ 个未解决的变更请求"
+            fi
+
+            if [ "$REQUIRE_CHECKS" = "true" ] && is_int "$CHECK_TOTAL"; then
+              if [ "$CHECK_TOTAL" -eq 0 ]; then
+                REASON="$REASON；没有任何 CI 检查结果（需先接入 CI）"
+              fi
+              if is_int "$CHECK_PENDING" && [ "$CHECK_PENDING" -gt 0 ]; then
+                REASON="$REASON；$CHECK_PENDING 项检查未完成"
+              fi
+              if is_int "$CHECK_BAD" && [ "$CHECK_BAD" -gt 0 ]; then
+                REASON="$REASON；检查失败 ${CHECK_BAD_NAMES}"
+              fi
+            fi
+
+            if [ -n "$REASON" ]; then
+              echo "::notice::PR #$PR 暂不合并 →$REASON"
+              SKIPPED=$((SKIPPED + 1))
+              continue
+            fi
+
+            # ── 执行合并 ──
+            echo "PR #$PR 全部条件满足，执行 $MERGE_METHOD 合并"
+            if gh pr merge "$PR" --repo "$REPO" $MERGE_FLAG $DEL_FLAG --subject "$TITLE (#$PR)"; then
+              MERGED=$((MERGED + 1))
+              KEPT="已保留"
+              if [ "$DELETE_BRANCH" = "true" ]; then KEPT="已删除"; fi
+              gh pr comment "$PR" --repo "$REPO" --body "$(printf '%s\n' \
+                "✅ **已自动合并**" \
+                "" \
+                "| 项目 | 结果 |" \
+                "| --- | --- |" \
+                "| 代码审查 | ${APPROVED} 人通过（${APPROVERS}），无未解决变更请求 |" \
+                "| CI 检查 | ${CHECK_TOTAL} 项全部通过 |" \
+                "| 合并方式 | ${MERGE_METHOD}，源分支 \`${BRANCH}\` ${KEPT} |" \
+                "" \
+                "@${AUTHOR} 本 PR 由自动合并流程处理完成。如有异议请直接在此留言，或从 \`${BRANCH}\` 重开分支跟进。")" \
+                || echo "::warning::PR #$PR 合并成功但回评失败"
+            else
+              echo "::warning::PR #$PR 合并失败（可能有新提交或合并规则拦截）"
+              SKIPPED=$((SKIPPED + 1))
+            fi
+          done
+
+          echo "::notice::本轮结果：合并 $MERGED 个，跳过 $SKIPPED 个"
