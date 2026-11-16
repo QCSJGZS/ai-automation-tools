@@ -28,6 +28,7 @@ AI 自动化工具集：把重复劳动固化成可复用的脚本、工作流�
 | --- | --- | --- |
 | `scripts/dxf_stats.py` | DXF 批量体检：图元数、类型、图层、外包尺寸、单位 | Python 3.8+，[文档](docs/dxf-stats.md) |
 | `scripts/dxf_profile.mjs` | DXF 截面识别：图框剔除、视图选择、外轮廓 + 内孔 | Node 18+，[文档](docs/dxf-recognize.md) |
+| `scripts/dxf_batch.mjs` | 批量识别一个目录的 DXF，产出 CSV 报告 | Node 18+，[文档](docs/dxf-batch.md) |
 | `lib/dxf/` | 截面识别链路（解析 / 几何 / 归类三段） | [说明](lib/dxf/README.md) |
 
 ## 快速开始
@@ -42,6 +43,9 @@ python scripts/dxf_stats.py D:\图纸 --recursive
 # 识别单张图的截面
 node scripts/dxf_profile.mjs D:\图纸\-6.1.dxf
 node scripts/dxf_profile.mjs D:\图纸\-6.1.dxf --json --svg out/preview.svg
+
+# 批量识别一个目录，产出 CSV 报告
+node scripts/dxf_batch.mjs D:\图纸 --csv out\dxf-report.csv
 
 # 跑测试
 npm test
